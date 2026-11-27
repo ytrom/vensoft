@@ -96,6 +96,7 @@ The `bowlcontrol` connection for `mysuncity_app` should use `autocommit` (Django
 - write to ComScore, or to any `venue_*` Vensoft table.
 - say whether a bowler number exists ("wrong number" vs "wrong password").
 - treat `PENDING` or `CANCELLED` as a member.
+- accept a bowler-chosen password under 8 characters (staff can set shorter test passwords with the staff tool).
 
 ## Staff side (today)
 
