@@ -68,7 +68,7 @@ from django.db import connections
 DUMMY = make_password("not-a-real-password")
 
 def portal_login(number: str, password: str, ip: str):
-    if not number.isdigit():
+    if not (number.isdigit() and len(number) == 6):
         check_password(password, DUMMY); return ("BAD", None)
     with connections["bowlcontrol"].cursor() as c:
         c.execute("SELECT * FROM suncity.portal_login_lookup(%s)", [int(number)])
@@ -107,7 +107,7 @@ Staff set/reset passwords, switch access and record memberships with `tools/port
 Control server (.253). A Mission Control / Control Menu screen for this is the planned next step.
 
 - Commands take the member number (100026) or the Sun City ID (26).
-- `set-password <member>` makes a random temporary password (or `--choose` to type one in hidden) and prints a temporary one once, setting `must_change_password`.
+- `set-password <member>` makes a random temporary password, prints it once and sets `must_change_password` (`--choose` types one in, hidden, instead).
   Staff can never view an existing password.
 - `access <id> on|off`, `unlock <id>`, `member <id> <year> [--status --amount --paid-date --ref]`,
   `unmember <id> <year>`, `members <year>`, `show <id>`, `check <id> [--year]`.
