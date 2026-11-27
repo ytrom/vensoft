@@ -112,12 +112,26 @@ def cmd_show(cur, a):
 
 def cmd_set_password(cur, a):
     name = need_profile(cur, a.id)
-    raw = temp_password()
+    if a.choose:
+        # Typed in (not shown, not stored). Only for a bowler choosing their own, e.g. staff setting their own test login.
+        import getpass
+        raw = getpass.getpass(f"New portal password for {name} (Sun City ID {a.id}): ")
+        if raw != getpass.getpass("Type it again: "):
+            sys.exit("The two didn't match. Nothing changed.")
+        if len(raw) < 4:
+            sys.exit("At least 4 characters. Nothing changed.")
+        if len(raw) < 8:
+            print("Warning: under 8 characters is easy to guess. Saving it anyway.")
+    else:
+        raw = temp_password()
     ensure_account(cur, a.id)
-    cur.execute("UPDATE suncity.portal_account SET password_hash=%s, must_change_password=true, password_set_at=now(), "
+    cur.execute("UPDATE suncity.portal_account SET password_hash=%s, must_change_password=%s, password_set_at=now(), "
                 "password_set_by=%s, failed_attempts=0, locked_until=NULL, updated_at=now() WHERE profile_id=%s",
-                (make_password(raw), a.by, a.id))
-    audit(cur, a.id, "PASSWORD_SET", "temporary password by staff", a.by)
+                (make_password(raw), not a.choose, a.by, a.id))
+    audit(cur, a.id, "PASSWORD_SET", "chosen password typed in" if a.choose else "temporary password by staff", a.by)
+    if a.choose:
+        print(f"Password saved for {name} (Sun City ID {a.id}). It is stored only as a hash.")
+        return
     print(f"Temporary password for {name} (Sun City ID {a.id}):  {raw}")
     print("Give it to the bowler now. It is not stored anywhere and can't be shown again.")
     print("The portal will ask them to choose their own password the first time they log in.")
@@ -243,6 +257,7 @@ def main(argv=None):
     s.add_parser("install")
     x = s.add_parser("show"); x.add_argument("id", type=int)
     x = s.add_parser("set-password"); x.add_argument("id", type=int); x.add_argument("--by", required=True)
+    x.add_argument("--choose", action="store_true", help="type the password in instead of making a temporary one")
     x = s.add_parser("access"); x.add_argument("id", type=int); x.add_argument("state", choices=["on", "off"])
     x.add_argument("--by", required=True); x.add_argument("--reason")
     x = s.add_parser("unlock"); x.add_argument("id", type=int); x.add_argument("--by", required=True)
