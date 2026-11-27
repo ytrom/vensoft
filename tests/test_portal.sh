@@ -58,6 +58,6 @@ $P -d bowlcontrol -c "INSERT INTO venue_bowlerprofile VALUES (12,'MORTY','DOUGLA
 $T find "mort douglass" | grep -q "^ *12 " && echo "PASS find by name" || { echo "FAIL find"; exit 1; }
 $T member 12 "$YEAR" --by test --status COMP >/dev/null; $T access 302 on --by test >/dev/null
 $T access-year "$YEAR" off --by test --except 12
-[ "$($P -d bowlcontrol -tAc "SELECT string_agg(profile_id||':'||access_enabled, ',' ORDER BY profile_id) FROM suncity.portal_account")" = "302:f,303:f" ] \
-  && echo "PASS access-year off leaves the --except bowler on" || { echo "FAIL access-year"; exit 1; }
+GOT=$($P -d bowlcontrol -tAc "SELECT string_agg(profile_id||':'||access_enabled, ',' ORDER BY profile_id) FROM suncity.portal_account")
+[ "$GOT" = "302:false,303:false" ] && echo "PASS access-year off leaves the --except bowler alone" || { echo "FAIL access-year: $GOT"; exit 1; }
 echo "All portal tests passed."
