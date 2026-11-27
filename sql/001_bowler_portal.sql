@@ -2,8 +2,9 @@
 -- Database: bowlcontrol (VM 102, 192.168.0.252). Schema: suncity (Sun City's own tables, next to
 -- suncity.comscore_link and suncity.bowler_details). Fletcher's venue_* tables are NOT changed.
 --
--- Bowler number = Sun City ID = public.venue_bowlerprofile.id (the same number written into ComScore
--- MASTER.MASTERNUM). Safe to run more than once. Nothing here touches ComScore.
+-- Member number (what bowlers type to log in) = Sun City ID + 100000, e.g. Sun City ID 26 = member 100026.
+-- Sun City ID = public.venue_bowlerprofile.id (the number written into ComScore MASTER.MASTERNUM); tables keep
+-- that ID. Safe to run more than once. Nothing here touches ComScore.
 
 CREATE SCHEMA IF NOT EXISTS suncity;
 
@@ -67,6 +68,12 @@ LANGUAGE sql STABLE AS $$
     SELECT extract(year FROM (now() AT TIME ZONE 'Australia/Brisbane'))::integer
 $$;
 
+-- Member number <-> Sun City ID. Member numbers start at 100000.
+CREATE OR REPLACE FUNCTION suncity.portal_member_number(p_profile_id bigint) RETURNS bigint
+LANGUAGE sql IMMUTABLE AS $$ SELECT p_profile_id + 100000 $$;
+CREATE OR REPLACE FUNCTION suncity.portal_profile_id(p_member_number bigint) RETURNS bigint
+LANGUAGE sql IMMUTABLE AS $$ SELECT CASE WHEN p_member_number > 100000 THEN p_member_number - 100000 END $$;
+
 -- Is this bowler a member for that year? Year left out = this year.
 CREATE OR REPLACE FUNCTION suncity.portal_is_member(p_profile_id bigint, p_year integer DEFAULT NULL)
 RETURNS boolean
@@ -87,11 +94,14 @@ LANGUAGE sql STABLE SECURITY DEFINER SET search_path = pg_catalog, suncity AS $$
     WHERE m.profile_id = p_profile_id AND m.status IN ('PAID', 'COMP')
 $$;
 
--- Step 1 of a login: everything the portal needs about ONE bowler number.
--- No row back = no such bowler. password_hash NULL = no password set yet.
-CREATE OR REPLACE FUNCTION suncity.portal_login_lookup(p_bowler_number bigint)
+-- Step 1 of a login: everything the portal needs about ONE member number (e.g. 100026).
+-- No row back = no such member number. password_hash NULL = no password set yet.
+-- (Dropped first because its columns changed on 27 Nov 2026; install re-grants it.)
+DROP FUNCTION IF EXISTS suncity.portal_login_lookup(bigint);
+CREATE FUNCTION suncity.portal_login_lookup(p_member_number bigint)
 RETURNS TABLE (
     profile_id           bigint,
+    member_number        bigint,
     first_name           text,
     last_name            text,
     email                text,
@@ -104,7 +114,7 @@ RETURNS TABLE (
     member_years         integer[]
 )
 LANGUAGE sql STABLE SECURITY DEFINER SET search_path = pg_catalog, public, suncity AS $$
-    SELECT p.id, p.first_name::text, p.last_name::text, p.email::text,
+    SELECT p.id, suncity.portal_member_number(p.id), p.first_name::text, p.last_name::text, p.email::text,
            a.password_hash,
            coalesce(a.access_enabled, false),
            coalesce(a.must_change_password, true),
@@ -114,7 +124,7 @@ LANGUAGE sql STABLE SECURITY DEFINER SET search_path = pg_catalog, public, sunci
            suncity.portal_member_years(p.id)
     FROM public.venue_bowlerprofile p
     LEFT JOIN suncity.portal_account a ON a.profile_id = p.id
-    WHERE p.id = p_bowler_number
+    WHERE p.id = suncity.portal_profile_id(p_member_number)
 $$;
 
 -- Step 3 of a login: tell Vensoft whether the password was right.

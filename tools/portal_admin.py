@@ -14,11 +14,11 @@ Never writes to ComScore.
   python3 portal_admin.py unmember 302 2027 --by Morty    remove that year
   python3 portal_admin.py members 2027                    list that year's members
   python3 portal_admin.py check 302 [--year 2027]         what the portal would decide (no password needed)
-  python3 portal_admin.py find "morty douglass"            look up a Sun City ID by name
+  python3 portal_admin.py find "morty douglass"            look up a member number by name
   python3 portal_admin.py access-year 2026 off --by Morty --except 12   switch a whole year's members
   python3 portal_admin.py grant-portal mysuncity_app      let the portal's login call the check functions
 
-Bowler number = Sun City ID = venue_bowlerprofile.id.
+Bowlers are given by MEMBER NUMBER (Sun City ID + 100000, e.g. 100026) or by Sun City ID (26); both work.
 """
 import argparse
 import base64
@@ -35,6 +35,19 @@ MC_DB_TS = os.environ.get("MC_DB_TS", "/home/suncityas/mission-control/lib/db.ts
 # Same format and strength as Django 5.2's default hasher, so Django's check_password() reads it.
 ITERATIONS = 1_000_000
 TEMP_ALPHABET = "abcdefghjkmnpqrstuvwxyz23456789"  # no 0/o, 1/l/i
+
+
+MEMBER_OFFSET = 100000
+
+
+def bowler(value):
+    """Member number (100026) or Sun City ID (26) -> Sun City ID."""
+    n = int(value)
+    return n - MEMBER_OFFSET if n > MEMBER_OFFSET else n
+
+
+def member_no(pid):
+    return pid + MEMBER_OFFSET
 
 
 def make_password(raw, salt=None, iterations=ITERATIONS):
@@ -77,7 +90,7 @@ def need_profile(cur, pid):
     cur.execute("SELECT first_name, last_name FROM public.venue_bowlerprofile WHERE id = %s", (pid,))
     row = cur.fetchone()
     if not row:
-        sys.exit(f"No Vensoft bowler with Sun City ID {pid}.")
+        sys.exit(f"No Vensoft bowler with member number {member_no(pid)} (Sun City ID {pid}).")
     return f"{row[0] or ''} {row[1] or ''}".strip()
 
 
@@ -92,18 +105,18 @@ def cmd_install(cur, a):
 
 def cmd_show(cur, a):
     name = need_profile(cur, a.id)
-    cur.execute("SELECT * FROM suncity.portal_login_lookup(%s)", (a.id,))
+    cur.execute("SELECT * FROM suncity.portal_login_lookup(%s)", (member_no(a.id),))
     r = cur.fetchone()
     cur.execute("SELECT season_year, status, amount, paid_date, payment_ref FROM suncity.season_membership "
                 "WHERE profile_id = %s ORDER BY season_year DESC", (a.id,))
     years = cur.fetchall()
     cur.execute("SELECT last_login_at, password_set_at, password_set_by FROM suncity.portal_account WHERE profile_id = %s", (a.id,))
     acc = cur.fetchone()
-    print(f"Sun City ID {a.id}: {name}  email {r[3] or '-'}")
-    print(f"  Password:  {'set' if r[4] else 'NOT SET'}" + (f" ({acc[1]:%d %b %Y} by {acc[2]})" if acc and acc[1] else "")
-          + ("  - must choose a new one at next login" if r[4] and r[6] else ""))
-    print(f"  Access:    {'ON' if r[5] else 'OFF'}" + (f"   LOCKED until {r[7]}" if r[7] else ""))
-    print(f"  Member {r[8]}: {'YES' if r[9] else 'NO'}")
+    print(f"Member {member_no(a.id)} (Sun City ID {a.id}): {name}  email {r[4] or '-'}")
+    print(f"  Password:  {'set' if r[5] else 'NOT SET'}" + (f" ({acc[1]:%d %b %Y} by {acc[2]})" if acc and acc[1] else "")
+          + ("  - must choose a new one at next login" if r[5] and r[7] else ""))
+    print(f"  Access:    {'ON' if r[6] else 'OFF'}" + (f"   LOCKED until {r[8]}" if r[8] else ""))
+    print(f"  Member {r[9]}: {'YES' if r[10] else 'NO'}")
     for y in years:
         print(f"    {y[0]}  {y[1]:<9} {'$' + str(y[2]) if y[2] is not None else '':<9} {y[3] or ''} {y[4] or ''}")
     if acc and acc[0]:
@@ -115,7 +128,7 @@ def cmd_set_password(cur, a):
     if a.choose:
         # Typed in (not shown, not stored). Only for a bowler choosing their own, e.g. staff setting their own test login.
         import getpass
-        raw = getpass.getpass(f"New portal password for {name} (Sun City ID {a.id}): ")
+        raw = getpass.getpass(f"New portal password for {name} (member {member_no(a.id)}, Sun City ID {a.id}): ")
         if raw != getpass.getpass("Type it again: "):
             sys.exit("The two didn't match. Nothing changed.")
         if len(raw) < 4:
@@ -130,9 +143,9 @@ def cmd_set_password(cur, a):
                 (make_password(raw), not a.choose, a.by, a.id))
     audit(cur, a.id, "PASSWORD_SET", "chosen password typed in" if a.choose else "temporary password by staff", a.by)
     if a.choose:
-        print(f"Password saved for {name} (Sun City ID {a.id}). It is stored only as a hash.")
+        print(f"Password saved for {name} (member {member_no(a.id)}, Sun City ID {a.id}). It is stored only as a hash.")
         return
-    print(f"Temporary password for {name} (Sun City ID {a.id}):  {raw}")
+    print(f"Temporary password for {name} (member {member_no(a.id)}, Sun City ID {a.id}):  {raw}")
     print("Give it to the bowler now. It is not stored anywhere and can't be shown again.")
     print("The portal will ask them to choose their own password the first time they log in.")
 
@@ -180,7 +193,7 @@ def cmd_members(cur, a):
                    WHERE m.season_year = %s ORDER BY p.last_name, p.first_name""", (a.year,))
     rows = cur.fetchall()
     for r in rows:
-        print(f"{r[0]:>6}  {(r[1] or '') + ' ' + (r[2] or ''):<32} {r[3]:<9} access {'ON ' if r[4] else 'OFF'}  password {'set' if r[5] else 'NOT SET'}")
+        print(f"{member_no(r[0]):>7}  {(r[1] or '') + ' ' + (r[2] or ''):<32} {r[3]:<9} access {'ON ' if r[4] else 'OFF'}  password {'set' if r[5] else 'NOT SET'}")
     print(f"{len(rows)} rows for {a.year}.")
 
 
@@ -191,7 +204,7 @@ def cmd_find(cur, a):
                 ("%" + "%".join(a.name.split()) + "%",))
     rows = cur.fetchall()
     for r in rows:
-        print(f"{r[0]:>6}  {(r[1] or '') + ' ' + (r[2] or ''):<32} {r[3] or '-':<34} member this year: {'YES' if r[4] else 'no'}")
+        print(f"{member_no(r[0]):>7}  {(r[1] or '') + ' ' + (r[2] or ''):<32} {r[3] or '-':<34} member this year: {'YES' if r[4] else 'no'}")
     print(f"{len(rows)} found.")
 
 
@@ -207,31 +220,31 @@ def cmd_access_year(cur, a):
         ensure_account(cur, pid)
         cur.execute("UPDATE suncity.portal_account SET access_enabled=%s, updated_at=now() WHERE profile_id=%s", (on, pid))
         audit(cur, pid, "ACCESS_ON" if on else "ACCESS_OFF", f"all {a.year} members", a.by)
-    print(f"Access {'ON' if on else 'OFF'} for {len(ids)} {a.year} members" + (f" (left out: {', '.join(map(str, keep))})" if keep else "") + ".")
+    print(f"Access {'ON' if on else 'OFF'} for {len(ids)} {a.year} members" + (f" (left out: {', '.join(str(member_no(k)) for k in keep)})" if keep else "") + ".")
 
 
 def decide(row):
     """What the portal should do for a bowler AFTER the password was checked. Mirrors docs/bowler-portal.md."""
-    if not row[5]:
+    if not row[6]:
         return "ACCESS_OFF"
-    if not row[9]:
+    if not row[10]:
         return "NOT_A_MEMBER"
-    if row[6]:
+    if row[7]:
         return "OK_MUST_CHANGE_PASSWORD"
     return "OK"
 
 
 def cmd_check(cur, a):
     need_profile(cur, a.id)
-    cur.execute("SELECT * FROM suncity.portal_login_lookup(%s)", (a.id,))
+    cur.execute("SELECT * FROM suncity.portal_login_lookup(%s)", (member_no(a.id),))
     r = cur.fetchone()
     if a.year:
         cur.execute("SELECT suncity.portal_is_member(%s, %s)", (a.id, a.year))
         print(f"Member {a.year}: {'YES' if cur.fetchone()[0] else 'NO'}")
-    if not r[4]:
+    if not r[5]:
         print("Portal would say: NO_PASSWORD (staff need to set one)")
-    elif r[7]:
-        print(f"Portal would say: LOCKED until {r[7]}")
+    elif r[8]:
+        print(f"Portal would say: LOCKED until {r[8]}")
     else:
         print(f"Portal would say (with the right password): {decide(r)}")
 
@@ -243,6 +256,8 @@ def cmd_grant(cur, a):
     cur.execute(f"""
         GRANT USAGE ON SCHEMA suncity TO {role};
         GRANT EXECUTE ON FUNCTION suncity.portal_current_season() TO {role};
+        GRANT EXECUTE ON FUNCTION suncity.portal_member_number(bigint) TO {role};
+        GRANT EXECUTE ON FUNCTION suncity.portal_profile_id(bigint) TO {role};
         GRANT EXECUTE ON FUNCTION suncity.portal_is_member(bigint, integer) TO {role};
         GRANT EXECUTE ON FUNCTION suncity.portal_member_years(bigint) TO {role};
         GRANT EXECUTE ON FUNCTION suncity.portal_login_lookup(bigint) TO {role};
@@ -255,21 +270,21 @@ def main(argv=None):
     p = argparse.ArgumentParser(description="Bowlers Portal staff tool")
     s = p.add_subparsers(dest="cmd", required=True)
     s.add_parser("install")
-    x = s.add_parser("show"); x.add_argument("id", type=int)
-    x = s.add_parser("set-password"); x.add_argument("id", type=int); x.add_argument("--by", required=True)
+    x = s.add_parser("show"); x.add_argument("id", type=bowler)
+    x = s.add_parser("set-password"); x.add_argument("id", type=bowler); x.add_argument("--by", required=True)
     x.add_argument("--choose", action="store_true", help="type the password in instead of making a temporary one")
-    x = s.add_parser("access"); x.add_argument("id", type=int); x.add_argument("state", choices=["on", "off"])
+    x = s.add_parser("access"); x.add_argument("id", type=bowler); x.add_argument("state", choices=["on", "off"])
     x.add_argument("--by", required=True); x.add_argument("--reason")
-    x = s.add_parser("unlock"); x.add_argument("id", type=int); x.add_argument("--by", required=True)
-    x = s.add_parser("member"); x.add_argument("id", type=int); x.add_argument("year", type=int)
+    x = s.add_parser("unlock"); x.add_argument("id", type=bowler); x.add_argument("--by", required=True)
+    x = s.add_parser("member"); x.add_argument("id", type=bowler); x.add_argument("year", type=int)
     x.add_argument("--by", required=True); x.add_argument("--status", default="PAID", choices=["PAID", "COMP", "PENDING", "CANCELLED"])
     x.add_argument("--amount", type=float); x.add_argument("--paid-date"); x.add_argument("--ref"); x.add_argument("--notes")
-    x = s.add_parser("unmember"); x.add_argument("id", type=int); x.add_argument("year", type=int); x.add_argument("--by", required=True)
+    x = s.add_parser("unmember"); x.add_argument("id", type=bowler); x.add_argument("year", type=int); x.add_argument("--by", required=True)
     x = s.add_parser("members"); x.add_argument("year", type=int)
-    x = s.add_parser("check"); x.add_argument("id", type=int); x.add_argument("--year", type=int)
+    x = s.add_parser("check"); x.add_argument("id", type=bowler); x.add_argument("--year", type=int)
     x = s.add_parser("find"); x.add_argument("name")
     x = s.add_parser("access-year"); x.add_argument("year", type=int); x.add_argument("state", choices=["on", "off"])
-    x.add_argument("--by", required=True); x.add_argument("--except", dest="except_ids", type=int, nargs="*")
+    x.add_argument("--by", required=True); x.add_argument("--except", dest="except_ids", type=bowler, nargs="*")
     x = s.add_parser("grant-portal"); x.add_argument("role")
     a = p.parse_args(argv)
     fn = {"install": cmd_install, "show": cmd_show, "set-password": cmd_set_password, "access": cmd_access,

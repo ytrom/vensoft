@@ -16,6 +16,7 @@ $P -d bowlcontrol -c "CREATE TABLE venue_bowlerprofile(id bigserial PRIMARY KEY,
 export PORTAL_DSN="host=$D port=55439 user=$SU dbname=bowlcontrol"
 T="python3 $ROOT/tools/portal_admin.py"
 $T install; $T install   # twice: must be safe to re-run
+$T show 100302 | grep -q "^Member 100302 (Sun City ID 302)" && echo "PASS staff tool takes member numbers"
 PW=$($T set-password 302 --by test | grep -o '[a-z0-9]\{4\}-[a-z0-9]\{4\}-[a-z0-9]\{4\}')
 YEAR=$($P -d bowlcontrol -tAc "SELECT suncity.portal_current_season()")
 $T member 302 "$YEAR" --by test --amount 50 >/dev/null
@@ -33,11 +34,12 @@ try:
     cur.execute("SELECT password_hash FROM suncity.portal_account"); ok(False, "portal role can't read tables")
 except psycopg2.errors.InsufficientPrivilege:
     ok(True, "portal role can't read tables")
-cur.execute("SELECT * FROM suncity.portal_login_lookup(302)"); r = cur.fetchone()
+cur.execute("SELECT * FROM suncity.portal_login_lookup(100302)"); r = cur.fetchone(); r = r[:1] + r[2:]
 ok(r[0] == 302 and r[5] and r[6] and r[9] and r[8] == Y, "lookup: access on, must change, member this year")
 ok(check_password(os.environ["PW"], r[4]) and not check_password("wrong", r[4]), "Django check_password reads staff hash")
-cur.execute("SELECT * FROM suncity.portal_login_lookup(999)"); ok(cur.fetchone() is None, "unknown number gives no row")
-cur.execute("SELECT password_hash FROM suncity.portal_login_lookup(303)"); ok(cur.fetchone()[0] is None, "member without password has NULL hash")
+cur.execute("SELECT * FROM suncity.portal_login_lookup(100999)"); ok(cur.fetchone() is None, "unknown number gives no row")
+cur.execute("SELECT * FROM suncity.portal_login_lookup(302)"); ok(cur.fetchone() is None, "plain Sun City ID is not a member number")
+cur.execute("SELECT password_hash FROM suncity.portal_login_lookup(100303)"); ok(cur.fetchone()[0] is None, "member without password has NULL hash")
 cur.execute("SELECT suncity.portal_is_member(302, %s), suncity.portal_is_member(302, %s)", (Y, Y + 1))
 ok(cur.fetchone() == (True, False), "PENDING next year is not a member")
 for i in range(5):
@@ -48,16 +50,16 @@ try:
 except psycopg2.Error:
     ok(True, "plain password refused")
 cur.execute("SELECT suncity.portal_change_password(302, %s)", (make_password("Bowl#2027"),))
-cur.execute("SELECT password_hash, must_change_password FROM suncity.portal_login_lookup(302)"); h, m = cur.fetchone()
+cur.execute("SELECT password_hash, must_change_password FROM suncity.portal_login_lookup(100302)"); h, m = cur.fetchone()
 ok(check_password("Bowl#2027", h) and not m, "bowler's own password saved, must_change cleared")
 raise SystemExit(1 if fails else 0)
 PY
 $T unlock 302 --by test >/dev/null; $T access 302 off --by test >/dev/null
 $T check 302 | grep -q ACCESS_OFF && echo "PASS access switch off blocks" || { echo "FAIL access switch"; exit 1; }
 $P -d bowlcontrol -c "INSERT INTO venue_bowlerprofile VALUES (12,'MORTY','DOUGLASS','m@example.com')"
-$T find "mort douglass" | grep -q "^ *12 " && echo "PASS find by name" || { echo "FAIL find"; exit 1; }
+$T find "mort douglass" | grep -q "^ *100012 " && echo "PASS find by name" || { echo "FAIL find"; exit 1; }
 $T member 12 "$YEAR" --by test --status COMP >/dev/null; $T access 302 on --by test >/dev/null
-$T access-year "$YEAR" off --by test --except 12
+$T access-year "$YEAR" off --by test --except 100012
 GOT=$($P -d bowlcontrol -tAc "SELECT string_agg(profile_id||':'||access_enabled, ',' ORDER BY profile_id) FROM suncity.portal_account")
 [ "$GOT" = "302:false,303:false" ] && echo "PASS access-year off leaves the --except bowler alone" || { echo "FAIL access-year: $GOT"; exit 1; }
 echo "All portal tests passed."

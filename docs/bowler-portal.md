@@ -4,10 +4,12 @@ Handoff for whoever builds the Sun City Bowlers Portal (web portal / MySuncity).
 
 ## The short version
 
-- A bowler logs in with their **bowler number** and a **password**.
-- Bowler number = **Sun City ID** = `public.venue_bowlerprofile.id` in the Vensoft (`bowlcontrol`) database.
-  It is the same number Sun City writes into ComScore `MASTER.MASTERNUM`. It is **not** the ComScore Address No.
-  (those get reused when ComScore packs) and not the old 6-digit `legacy_bowler_id`.
+- A bowler logs in with their **member number** and a **password**.
+- Member number = **Sun City ID + 100000**, so every member number has 6 digits: Sun City ID 26 = member **100026**.
+  Sun City ID = `public.venue_bowlerprofile.id` in the Vensoft (`bowlcontrol`) database, the same number Sun City
+  writes into ComScore `MASTER.MASTERNUM`. Inside the database everything is keyed by the Sun City ID (`profile_id`);
+  the portal only ever shows and accepts the member number. It is **not** the ComScore Address No. and not the old
+  `legacy_bowler_id`. A plain Sun City ID (e.g. `26`) typed at login finds nobody.
 - The bowler gets in only when **all** of these are true:
   1. the password is right,
   2. their portal **access switch is ON** (staff can turn it off),
@@ -31,16 +33,17 @@ The portal's database login (today `mysuncity_app`) has **no table access**, onl
 
 | Function | Returns | Use |
 |---|---|---|
-| `suncity.portal_login_lookup(bowler_number bigint)` | one row or none: `profile_id, first_name, last_name, email, password_hash, access_enabled, must_change_password, locked_until, season_year, current_member, member_years int[]` | step 1 of login |
+| `suncity.portal_login_lookup(member_number bigint)` | one row or none: `profile_id, member_number, first_name, last_name, email, password_hash, access_enabled, must_change_password, locked_until, season_year, current_member, member_years int[]` | step 1 of login |
 | `suncity.portal_record_login(profile_id bigint, ok bool, from text)` | `locked_until` or NULL | step 3: report right/wrong password. 5 wrong in a row locks that number for 15 min |
 | `suncity.portal_change_password(profile_id bigint, new_hash text)` | true/false | bowler picks their own password. Takes a **hash** (Django `make_password`, pbkdf2_sha256, at least 600000 iterations), never the password |
 | `suncity.portal_is_member(profile_id bigint, year int default this year)` | bool | "is this bowler a 2027 member?" for any year |
 | `suncity.portal_member_years(profile_id bigint)` | int[] newest first | show "Member 2026, 2025" |
 | `suncity.portal_current_season()` | int | this season year (Brisbane time) |
+| `suncity.portal_member_number(profile_id)` / `suncity.portal_profile_id(member_number)` | bigint | convert between the two (+/- 100000) |
 
 ## Login steps (what the portal must do)
 
-1. Read bowler number (digits only) and password. Rate limit by IP as well.
+1. Read member number (6 digits) and password. Rate limit by IP as well.
 2. `SELECT * FROM suncity.portal_login_lookup(%s)`.
 3. If no row, or `password_hash` is NULL: run a dummy `check_password` anyway (same time cost) and show the
    **same** message as a wrong password: "Bowler number or password is wrong." Don't reveal which part.
@@ -72,7 +75,7 @@ def portal_login(number: str, password: str, ip: str):
         row = c.fetchone()
         if not row or not row[4]:
             check_password(password, DUMMY); return ("BAD", None)
-        (pid, first, last, email, pw_hash, access_on, must_change,
+        (pid, member_no, first, last, email, pw_hash, access_on, must_change,
          locked_until, season, member, years) = row
         if locked_until:
             return ("LOCKED", locked_until)
@@ -94,7 +97,7 @@ The `bowlcontrol` connection for `mysuncity_app` should use `autocommit` (Django
 - read or write the `suncity.portal_*` / `season_membership` tables directly, or ask for table grants.
 - let a bowler set their own access switch or membership. Those are staff only.
 - write to ComScore, or to any `venue_*` Vensoft table.
-- say whether a bowler number exists ("wrong number" vs "wrong password").
+- say whether a member number exists ("wrong number" vs "wrong password").
 - treat `PENDING` or `CANCELLED` as a member.
 - accept a bowler-chosen password under 8 characters (staff can set shorter test passwords with the staff tool).
 
@@ -103,7 +106,8 @@ The `bowlcontrol` connection for `mysuncity_app` should use `autocommit` (Django
 Staff set/reset passwords, switch access and record memberships with `tools/portal_admin.py` on the Mission
 Control server (.253). A Mission Control / Control Menu screen for this is the planned next step.
 
-- `set-password <id>` makes a random temporary password, prints it once, and sets `must_change_password`.
+- Commands take the member number (100026) or the Sun City ID (26).
+- `set-password <member>` makes a random temporary password (or `--choose` to type one in hidden) and prints a temporary one once, setting `must_change_password`.
   Staff can never view an existing password.
 - `access <id> on|off`, `unlock <id>`, `member <id> <year> [--status --amount --paid-date --ref]`,
   `unmember <id> <year>`, `members <year>`, `show <id>`, `check <id> [--year]`.
