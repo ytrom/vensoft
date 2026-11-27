@@ -9,7 +9,7 @@ CREATE SCHEMA IF NOT EXISTS suncity;
 
 -- One row per bowler who has portal access set up.
 CREATE TABLE IF NOT EXISTS suncity.portal_account (
-    profile_id           integer PRIMARY KEY REFERENCES public.venue_bowlerprofile(id) ON DELETE CASCADE,
+    profile_id           bigint   PRIMARY KEY REFERENCES public.venue_bowlerprofile(id) ON DELETE CASCADE,
     -- Django-format hash only, e.g. pbkdf2_sha256$1000000$<salt>$<hash>. Never a plain password.
     password_hash        text,
     -- Staff switch. OFF blocks the portal even for a paid member.
@@ -29,7 +29,7 @@ CREATE TABLE IF NOT EXISTS suncity.portal_account (
 -- One row per bowler per season year (2026, 2027, ...). A bowler can hold many years.
 CREATE TABLE IF NOT EXISTS suncity.season_membership (
     id          serial PRIMARY KEY,
-    profile_id  integer     NOT NULL REFERENCES public.venue_bowlerprofile(id) ON DELETE CASCADE,
+    profile_id  bigint       NOT NULL REFERENCES public.venue_bowlerprofile(id) ON DELETE CASCADE,
     season_year smallint    NOT NULL CHECK (season_year BETWEEN 2000 AND 2100),
     -- PAID and COMP (free / life member) count as a member. PENDING (not paid yet) and CANCELLED don't.
     status      text        NOT NULL DEFAULT 'PAID' CHECK (status IN ('PAID', 'COMP', 'PENDING', 'CANCELLED')),
@@ -48,7 +48,7 @@ CREATE INDEX IF NOT EXISTS season_membership_year ON suncity.season_membership (
 -- Who changed what (password set/reset, access on/off, membership changes, lockouts). Never holds a password.
 CREATE TABLE IF NOT EXISTS suncity.portal_audit (
     id         bigserial PRIMARY KEY,
-    profile_id integer     NOT NULL,
+    profile_id bigint       NOT NULL,
     action     text        NOT NULL,
     detail     text        NOT NULL DEFAULT '',
     done_by    text        NOT NULL DEFAULT '',
@@ -68,7 +68,7 @@ LANGUAGE sql STABLE AS $$
 $$;
 
 -- Is this bowler a member for that year? Year left out = this year.
-CREATE OR REPLACE FUNCTION suncity.portal_is_member(p_profile_id integer, p_year integer DEFAULT NULL)
+CREATE OR REPLACE FUNCTION suncity.portal_is_member(p_profile_id bigint, p_year integer DEFAULT NULL)
 RETURNS boolean
 LANGUAGE sql STABLE SECURITY DEFINER SET search_path = pg_catalog, suncity AS $$
     SELECT EXISTS (
@@ -79,7 +79,7 @@ LANGUAGE sql STABLE SECURITY DEFINER SET search_path = pg_catalog, suncity AS $$
 $$;
 
 -- Every year this bowler has been a member, newest first.
-CREATE OR REPLACE FUNCTION suncity.portal_member_years(p_profile_id integer)
+CREATE OR REPLACE FUNCTION suncity.portal_member_years(p_profile_id bigint)
 RETURNS integer[]
 LANGUAGE sql STABLE SECURITY DEFINER SET search_path = pg_catalog, suncity AS $$
     SELECT coalesce(array_agg(m.season_year::integer ORDER BY m.season_year DESC), '{}')
@@ -89,9 +89,9 @@ $$;
 
 -- Step 1 of a login: everything the portal needs about ONE bowler number.
 -- No row back = no such bowler. password_hash NULL = no password set yet.
-CREATE OR REPLACE FUNCTION suncity.portal_login_lookup(p_bowler_number integer)
+CREATE OR REPLACE FUNCTION suncity.portal_login_lookup(p_bowler_number bigint)
 RETURNS TABLE (
-    profile_id           integer,
+    profile_id           bigint,
     first_name           text,
     last_name            text,
     email                text,
@@ -119,7 +119,7 @@ $$;
 
 -- Step 3 of a login: tell Vensoft whether the password was right.
 -- 5 wrong in a row locks that bowler number for 15 minutes. A right one clears the count.
-CREATE OR REPLACE FUNCTION suncity.portal_record_login(p_profile_id integer, p_ok boolean, p_from text DEFAULT '')
+CREATE OR REPLACE FUNCTION suncity.portal_record_login(p_profile_id bigint, p_ok boolean, p_from text DEFAULT '')
 RETURNS timestamptz  -- locked_until, NULL when not locked
 LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = pg_catalog, suncity AS $$
 DECLARE
@@ -147,7 +147,7 @@ $$;
 
 -- The bowler chooses their own password (after the portal has checked the old one).
 -- Takes a HASH made by the portal (Django make_password), never the password itself.
-CREATE OR REPLACE FUNCTION suncity.portal_change_password(p_profile_id integer, p_new_hash text)
+CREATE OR REPLACE FUNCTION suncity.portal_change_password(p_profile_id bigint, p_new_hash text)
 RETURNS boolean
 LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = pg_catalog, suncity AS $$
 BEGIN
@@ -167,8 +167,8 @@ $$;
 
 -- Functions are callable by everyone by default in PostgreSQL; take that away, then grant per role
 -- with: python3 tools/portal_admin.py grant-portal <role>
-REVOKE ALL ON FUNCTION suncity.portal_is_member(integer, integer)          FROM PUBLIC;
-REVOKE ALL ON FUNCTION suncity.portal_member_years(integer)                FROM PUBLIC;
-REVOKE ALL ON FUNCTION suncity.portal_login_lookup(integer)                FROM PUBLIC;
-REVOKE ALL ON FUNCTION suncity.portal_record_login(integer, boolean, text) FROM PUBLIC;
-REVOKE ALL ON FUNCTION suncity.portal_change_password(integer, text)       FROM PUBLIC;
+REVOKE ALL ON FUNCTION suncity.portal_is_member(bigint, integer)          FROM PUBLIC;
+REVOKE ALL ON FUNCTION suncity.portal_member_years(bigint)                FROM PUBLIC;
+REVOKE ALL ON FUNCTION suncity.portal_login_lookup(bigint)                FROM PUBLIC;
+REVOKE ALL ON FUNCTION suncity.portal_record_login(bigint, boolean, text) FROM PUBLIC;
+REVOKE ALL ON FUNCTION suncity.portal_change_password(bigint, text)       FROM PUBLIC;

@@ -201,11 +201,11 @@ def cmd_grant(cur, a):
     cur.execute(f"""
         GRANT USAGE ON SCHEMA suncity TO {role};
         GRANT EXECUTE ON FUNCTION suncity.portal_current_season() TO {role};
-        GRANT EXECUTE ON FUNCTION suncity.portal_is_member(integer, integer) TO {role};
-        GRANT EXECUTE ON FUNCTION suncity.portal_member_years(integer) TO {role};
-        GRANT EXECUTE ON FUNCTION suncity.portal_login_lookup(integer) TO {role};
-        GRANT EXECUTE ON FUNCTION suncity.portal_record_login(integer, boolean, text) TO {role};
-        GRANT EXECUTE ON FUNCTION suncity.portal_change_password(integer, text) TO {role};""")
+        GRANT EXECUTE ON FUNCTION suncity.portal_is_member(bigint, integer) TO {role};
+        GRANT EXECUTE ON FUNCTION suncity.portal_member_years(bigint) TO {role};
+        GRANT EXECUTE ON FUNCTION suncity.portal_login_lookup(bigint) TO {role};
+        GRANT EXECUTE ON FUNCTION suncity.portal_record_login(bigint, boolean, text) TO {role};
+        GRANT EXECUTE ON FUNCTION suncity.portal_change_password(bigint, text) TO {role};""")
     print(f"{role} can now call the portal_* functions (no table access).")
 
 

@@ -11,7 +11,7 @@ RUN "$BIN/initdb -D $D/d -A trust >/dev/null && $BIN/pg_ctl -D $D/d -o '-k $D -p
 trap 'RUN "$BIN/pg_ctl -D $D/d stop -m fast >/dev/null"; rm -rf "$D"' EXIT
 P="psql -q -h $D -p 55439 -U $SU"
 $P -d postgres -c "CREATE ROLE portal_test LOGIN" -c "CREATE DATABASE bowlcontrol"
-$P -d bowlcontrol -c "CREATE TABLE venue_bowlerprofile(id serial PRIMARY KEY, first_name varchar(100), last_name varchar(100), email varchar(254));
+$P -d bowlcontrol -c "CREATE TABLE venue_bowlerprofile(id bigserial PRIMARY KEY, first_name varchar(100), last_name varchar(100), email varchar(254));
   INSERT INTO venue_bowlerprofile VALUES (302,'DAMON','LEE-HONG','d@example.com'),(303,'JO','BLOGGS',NULL);"
 export PORTAL_DSN="host=$D port=55439 user=$SU dbname=bowlcontrol"
 T="python3 $ROOT/tools/portal_admin.py"

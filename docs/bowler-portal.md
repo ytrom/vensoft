@@ -31,11 +31,11 @@ The portal's database login (today `mysuncity_app`) has **no table access**, onl
 
 | Function | Returns | Use |
 |---|---|---|
-| `suncity.portal_login_lookup(bowler_number int)` | one row or none: `profile_id, first_name, last_name, email, password_hash, access_enabled, must_change_password, locked_until, season_year, current_member, member_years int[]` | step 1 of login |
-| `suncity.portal_record_login(profile_id int, ok bool, from text)` | `locked_until` or NULL | step 3: report right/wrong password. 5 wrong in a row locks that number for 15 min |
-| `suncity.portal_change_password(profile_id int, new_hash text)` | true/false | bowler picks their own password. Takes a **hash** (Django `make_password`, pbkdf2_sha256, at least 600000 iterations), never the password |
-| `suncity.portal_is_member(profile_id int, year int default this year)` | bool | "is this bowler a 2027 member?" for any year |
-| `suncity.portal_member_years(profile_id int)` | int[] newest first | show "Member 2026, 2025" |
+| `suncity.portal_login_lookup(bowler_number bigint)` | one row or none: `profile_id, first_name, last_name, email, password_hash, access_enabled, must_change_password, locked_until, season_year, current_member, member_years int[]` | step 1 of login |
+| `suncity.portal_record_login(profile_id bigint, ok bool, from text)` | `locked_until` or NULL | step 3: report right/wrong password. 5 wrong in a row locks that number for 15 min |
+| `suncity.portal_change_password(profile_id bigint, new_hash text)` | true/false | bowler picks their own password. Takes a **hash** (Django `make_password`, pbkdf2_sha256, at least 600000 iterations), never the password |
+| `suncity.portal_is_member(profile_id bigint, year int default this year)` | bool | "is this bowler a 2027 member?" for any year |
+| `suncity.portal_member_years(profile_id bigint)` | int[] newest first | show "Member 2026, 2025" |
 | `suncity.portal_current_season()` | int | this season year (Brisbane time) |
 
 ## Login steps (what the portal must do)
