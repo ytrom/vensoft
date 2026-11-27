@@ -13,8 +13,8 @@ CREATE TABLE IF NOT EXISTS suncity.portal_account (
     profile_id           bigint   PRIMARY KEY REFERENCES public.venue_bowlerprofile(id) ON DELETE CASCADE,
     -- Django-format hash only, e.g. pbkdf2_sha256$1000000$<salt>$<hash>. Never a plain password.
     password_hash        text,
-    -- Staff switch. OFF blocks the portal even for a paid member.
-    access_enabled       boolean     NOT NULL DEFAULT true,
+    -- Staff switch. OFF blocks the portal even for a paid member. Starts OFF; staff turn it on.
+    access_enabled       boolean     NOT NULL DEFAULT false,
     -- Set when staff set or reset a password, so the portal asks the bowler to choose their own.
     must_change_password boolean     NOT NULL DEFAULT true,
     password_set_at      timestamptz,
@@ -44,6 +44,30 @@ CREATE TABLE IF NOT EXISTS suncity.season_membership (
     updated_by  text        NOT NULL DEFAULT '',
     UNIQUE (profile_id, season_year)
 );
+-- Login username, saved per bowler (27 Nov 2026). Starts as the member number = Sun City ID + 100000
+-- (Sun City ID 26 -> '100026'). Text so it can be changed later; unique across bowlers.
+ALTER TABLE suncity.portal_account ADD COLUMN IF NOT EXISTS login_username text;
+ALTER TABLE suncity.portal_account ALTER COLUMN access_enabled SET DEFAULT false;
+UPDATE suncity.portal_account SET login_username = (profile_id + 100000)::text WHERE login_username IS NULL;
+ALTER TABLE suncity.portal_account ALTER COLUMN login_username SET NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS portal_account_login_username ON suncity.portal_account (login_username);
+
+CREATE OR REPLACE FUNCTION suncity.portal_account_defaults() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+    NEW.login_username := coalesce(nullif(trim(NEW.login_username), ''), (NEW.profile_id + 100000)::text);
+    RETURN NEW;
+END $$;
+DROP TRIGGER IF EXISTS portal_account_defaults ON suncity.portal_account;
+CREATE TRIGGER portal_account_defaults BEFORE INSERT OR UPDATE OF login_username ON suncity.portal_account
+    FOR EACH ROW EXECUTE FUNCTION suncity.portal_account_defaults();
+
+-- Every Vensoft bowler gets a saved login username. Bowlers added here for the first time start with
+-- portal access OFF (they have no password or membership yet anyway). Run again to pick up new bowlers
+-- (the staff tool's install and sync-usernames commands do).
+INSERT INTO suncity.portal_account (profile_id, access_enabled)
+SELECT p.id, false FROM public.venue_bowlerprofile p
+ON CONFLICT (profile_id) DO NOTHING;
+
 CREATE INDEX IF NOT EXISTS season_membership_year ON suncity.season_membership (season_year, status);
 
 -- Who changed what (password set/reset, access on/off, membership changes, lockouts). Never holds a password.
@@ -94,14 +118,15 @@ LANGUAGE sql STABLE SECURITY DEFINER SET search_path = pg_catalog, suncity AS $$
     WHERE m.profile_id = p_profile_id AND m.status IN ('PAID', 'COMP')
 $$;
 
--- Step 1 of a login: everything the portal needs about ONE member number (e.g. 100026).
--- No row back = no such member number. password_hash NULL = no password set yet.
--- (Dropped first because its columns changed on 27 Nov 2026; install re-grants it.)
+-- Step 1 of a login: everything the portal needs about ONE login username (e.g. '100026').
+-- No row back = nobody has that username. password_hash NULL = no password set yet.
+-- (Dropped first because it changed on 27 Nov 2026; install re-grants it.)
 DROP FUNCTION IF EXISTS suncity.portal_login_lookup(bigint);
-CREATE FUNCTION suncity.portal_login_lookup(p_member_number bigint)
+DROP FUNCTION IF EXISTS suncity.portal_login_lookup(text);
+CREATE FUNCTION suncity.portal_login_lookup(p_login_username text)
 RETURNS TABLE (
     profile_id           bigint,
-    member_number        bigint,
+    login_username       text,
     first_name           text,
     last_name            text,
     email                text,
@@ -114,17 +139,17 @@ RETURNS TABLE (
     member_years         integer[]
 )
 LANGUAGE sql STABLE SECURITY DEFINER SET search_path = pg_catalog, public, suncity AS $$
-    SELECT p.id, suncity.portal_member_number(p.id), p.first_name::text, p.last_name::text, p.email::text,
+    SELECT p.id, a.login_username, p.first_name::text, p.last_name::text, p.email::text,
            a.password_hash,
-           coalesce(a.access_enabled, false),
-           coalesce(a.must_change_password, true),
+           a.access_enabled,
+           a.must_change_password,
            CASE WHEN a.locked_until > now() THEN a.locked_until END,
            suncity.portal_current_season(),
            suncity.portal_is_member(p.id),
            suncity.portal_member_years(p.id)
-    FROM public.venue_bowlerprofile p
-    LEFT JOIN suncity.portal_account a ON a.profile_id = p.id
-    WHERE p.id = suncity.portal_profile_id(p_member_number)
+    FROM suncity.portal_account a
+    JOIN public.venue_bowlerprofile p ON p.id = a.profile_id
+    WHERE a.login_username = trim(p_login_username)
 $$;
 
 -- Step 3 of a login: tell Vensoft whether the password was right.
@@ -179,6 +204,6 @@ $$;
 -- with: python3 tools/portal_admin.py grant-portal <role>
 REVOKE ALL ON FUNCTION suncity.portal_is_member(bigint, integer)          FROM PUBLIC;
 REVOKE ALL ON FUNCTION suncity.portal_member_years(bigint)                FROM PUBLIC;
-REVOKE ALL ON FUNCTION suncity.portal_login_lookup(bigint)                FROM PUBLIC;
+REVOKE ALL ON FUNCTION suncity.portal_login_lookup(text)                  FROM PUBLIC;
 REVOKE ALL ON FUNCTION suncity.portal_record_login(bigint, boolean, text) FROM PUBLIC;
 REVOKE ALL ON FUNCTION suncity.portal_change_password(bigint, text)       FROM PUBLIC;

@@ -6,6 +6,7 @@ lib/db.ts, so no password is kept in this repo. Writes only to the bowlcontrol "
 Never writes to ComScore.
 
   python3 portal_admin.py install                         create/upgrade the tables and functions
+  python3 portal_admin.py sync-usernames                  give new Vensoft bowlers their login username
   python3 portal_admin.py show 302                        one bowler: access, lock, member years
   python3 portal_admin.py set-password 302 --by Morty     make a temporary password (printed once)
   python3 portal_admin.py access 302 off --by Morty       portal switch on/off
@@ -86,6 +87,12 @@ def audit(cur, pid, action, detail, by):
                 (pid, action, detail, by))
 
 
+def username_of(cur, pid):
+    cur.execute("SELECT login_username FROM suncity.portal_account WHERE profile_id = %s", (pid,))
+    r = cur.fetchone()
+    return r[0] if r else None
+
+
 def need_profile(cur, pid):
     cur.execute("SELECT first_name, last_name FROM public.venue_bowlerprofile WHERE id = %s", (pid,))
     row = cur.fetchone()
@@ -95,24 +102,37 @@ def need_profile(cur, pid):
 
 
 def ensure_account(cur, pid):
-    cur.execute("INSERT INTO suncity.portal_account (profile_id) VALUES (%s) ON CONFLICT DO NOTHING", (pid,))
+    cur.execute("INSERT INTO suncity.portal_account (profile_id, access_enabled) VALUES (%s, false) ON CONFLICT DO NOTHING", (pid,))
 
 
 def cmd_install(cur, a):
     cur.execute(open(SQL_FILE, encoding="utf-8").read())
     print("Installed: suncity.portal_account, suncity.season_membership, suncity.portal_audit + portal_* functions.")
+    cur.execute("SELECT count(*), count(*) FILTER (WHERE access_enabled) FROM suncity.portal_account")
+    n, on = cur.fetchone()
+    print(f"Login usernames saved for {n} Vensoft bowlers; portal access ON for {on}.")
+
+
+def cmd_sync(cur, a):
+    """Give every Vensoft bowler without one a saved login username (member number). New ones start access OFF."""
+    cur.execute("""INSERT INTO suncity.portal_account (profile_id, access_enabled)
+                   SELECT p.id, false FROM public.venue_bowlerprofile p ON CONFLICT (profile_id) DO NOTHING""")
+    added = cur.rowcount
+    cur.execute("SELECT count(*) FROM suncity.portal_account")
+    print(f"Login usernames: {cur.fetchone()[0]} bowlers have one ({added} added just now).")
 
 
 def cmd_show(cur, a):
     name = need_profile(cur, a.id)
-    cur.execute("SELECT * FROM suncity.portal_login_lookup(%s)", (member_no(a.id),))
+    ensure_account(cur, a.id)
+    cur.execute("SELECT * FROM suncity.portal_login_lookup(%s)", (username_of(cur, a.id),))
     r = cur.fetchone()
     cur.execute("SELECT season_year, status, amount, paid_date, payment_ref FROM suncity.season_membership "
                 "WHERE profile_id = %s ORDER BY season_year DESC", (a.id,))
     years = cur.fetchall()
     cur.execute("SELECT last_login_at, password_set_at, password_set_by FROM suncity.portal_account WHERE profile_id = %s", (a.id,))
     acc = cur.fetchone()
-    print(f"Member {member_no(a.id)} (Sun City ID {a.id}): {name}  email {r[4] or '-'}")
+    print(f"Login username {r[1]} (Sun City ID {a.id}): {name}  email {r[4] or '-'}")
     print(f"  Password:  {'set' if r[5] else 'NOT SET'}" + (f" ({acc[1]:%d %b %Y} by {acc[2]})" if acc and acc[1] else "")
           + ("  - must choose a new one at next login" if r[5] and r[7] else ""))
     print(f"  Access:    {'ON' if r[6] else 'OFF'}" + (f"   LOCKED until {r[8]}" if r[8] else ""))
@@ -187,24 +207,24 @@ def cmd_unmember(cur, a):
 
 
 def cmd_members(cur, a):
-    cur.execute("""SELECT p.id, p.first_name, p.last_name, m.status, coalesce(pa.access_enabled, false), pa.password_hash IS NOT NULL
+    cur.execute("""SELECT coalesce(pa.login_username, (p.id + 100000)::text), p.first_name, p.last_name, m.status, coalesce(pa.access_enabled, false), pa.password_hash IS NOT NULL
                    FROM suncity.season_membership m JOIN public.venue_bowlerprofile p ON p.id = m.profile_id
                    LEFT JOIN suncity.portal_account pa ON pa.profile_id = p.id
                    WHERE m.season_year = %s ORDER BY p.last_name, p.first_name""", (a.year,))
     rows = cur.fetchall()
     for r in rows:
-        print(f"{member_no(r[0]):>7}  {(r[1] or '') + ' ' + (r[2] or ''):<32} {r[3]:<9} access {'ON ' if r[4] else 'OFF'}  password {'set' if r[5] else 'NOT SET'}")
+        print(f"{r[0]:>7}  {(r[1] or '') + ' ' + (r[2] or ''):<32} {r[3]:<9} access {'ON ' if r[4] else 'OFF'}  password {'set' if r[5] else 'NOT SET'}")
     print(f"{len(rows)} rows for {a.year}.")
 
 
 def cmd_find(cur, a):
-    cur.execute("""SELECT p.id, p.first_name, p.last_name, p.email, suncity.portal_is_member(p.id)
-                   FROM public.venue_bowlerprofile p
+    cur.execute("""SELECT coalesce(pa.login_username, (p.id + 100000)::text), p.first_name, p.last_name, p.email, suncity.portal_is_member(p.id)
+                   FROM public.venue_bowlerprofile p LEFT JOIN suncity.portal_account pa ON pa.profile_id = p.id
                    WHERE (coalesce(p.first_name,'') || ' ' || coalesce(p.last_name,'')) ILIKE %s ORDER BY p.id""",
                 ("%" + "%".join(a.name.split()) + "%",))
     rows = cur.fetchall()
     for r in rows:
-        print(f"{member_no(r[0]):>7}  {(r[1] or '') + ' ' + (r[2] or ''):<32} {r[3] or '-':<34} member this year: {'YES' if r[4] else 'no'}")
+        print(f"{r[0]:>7}  {(r[1] or '') + ' ' + (r[2] or ''):<32} {r[3] or '-':<34} member this year: {'YES' if r[4] else 'no'}")
     print(f"{len(rows)} found.")
 
 
@@ -236,7 +256,8 @@ def decide(row):
 
 def cmd_check(cur, a):
     need_profile(cur, a.id)
-    cur.execute("SELECT * FROM suncity.portal_login_lookup(%s)", (member_no(a.id),))
+    ensure_account(cur, a.id)
+    cur.execute("SELECT * FROM suncity.portal_login_lookup(%s)", (username_of(cur, a.id),))
     r = cur.fetchone()
     if a.year:
         cur.execute("SELECT suncity.portal_is_member(%s, %s)", (a.id, a.year))
@@ -260,7 +281,7 @@ def cmd_grant(cur, a):
         GRANT EXECUTE ON FUNCTION suncity.portal_profile_id(bigint) TO {role};
         GRANT EXECUTE ON FUNCTION suncity.portal_is_member(bigint, integer) TO {role};
         GRANT EXECUTE ON FUNCTION suncity.portal_member_years(bigint) TO {role};
-        GRANT EXECUTE ON FUNCTION suncity.portal_login_lookup(bigint) TO {role};
+        GRANT EXECUTE ON FUNCTION suncity.portal_login_lookup(text) TO {role};
         GRANT EXECUTE ON FUNCTION suncity.portal_record_login(bigint, boolean, text) TO {role};
         GRANT EXECUTE ON FUNCTION suncity.portal_change_password(bigint, text) TO {role};""")
     print(f"{role} can now call the portal_* functions (no table access).")
@@ -270,6 +291,7 @@ def main(argv=None):
     p = argparse.ArgumentParser(description="Bowlers Portal staff tool")
     s = p.add_subparsers(dest="cmd", required=True)
     s.add_parser("install")
+    s.add_parser("sync-usernames")
     x = s.add_parser("show"); x.add_argument("id", type=bowler)
     x = s.add_parser("set-password"); x.add_argument("id", type=bowler); x.add_argument("--by", required=True)
     x.add_argument("--choose", action="store_true", help="type the password in instead of making a temporary one")
@@ -287,7 +309,7 @@ def main(argv=None):
     x.add_argument("--by", required=True); x.add_argument("--except", dest="except_ids", type=bowler, nargs="*")
     x = s.add_parser("grant-portal"); x.add_argument("role")
     a = p.parse_args(argv)
-    fn = {"install": cmd_install, "show": cmd_show, "set-password": cmd_set_password, "access": cmd_access,
+    fn = {"install": cmd_install, "sync-usernames": cmd_sync, "show": cmd_show, "set-password": cmd_set_password, "access": cmd_access,
           "unlock": cmd_unlock, "member": cmd_member, "unmember": cmd_unmember, "members": cmd_members,
           "check": cmd_check, "find": cmd_find, "access-year": cmd_access_year, "grant-portal": cmd_grant}[a.cmd]
     conn = connect()
