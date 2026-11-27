@@ -14,6 +14,8 @@ Never writes to ComScore.
   python3 portal_admin.py unmember 302 2027 --by Morty    remove that year
   python3 portal_admin.py members 2027                    list that year's members
   python3 portal_admin.py check 302 [--year 2027]         what the portal would decide (no password needed)
+  python3 portal_admin.py find "morty douglass"            look up a Sun City ID by name
+  python3 portal_admin.py access-year 2026 off --by Morty --except 12   switch a whole year's members
   python3 portal_admin.py grant-portal mysuncity_app      let the portal's login call the check functions
 
 Bowler number = Sun City ID = venue_bowlerprofile.id.
@@ -168,6 +170,32 @@ def cmd_members(cur, a):
     print(f"{len(rows)} rows for {a.year}.")
 
 
+def cmd_find(cur, a):
+    cur.execute("""SELECT p.id, p.first_name, p.last_name, p.email, suncity.portal_is_member(p.id)
+                   FROM public.venue_bowlerprofile p
+                   WHERE (coalesce(p.first_name,'') || ' ' || coalesce(p.last_name,'')) ILIKE %s ORDER BY p.id""",
+                ("%" + "%".join(a.name.split()) + "%",))
+    rows = cur.fetchall()
+    for r in rows:
+        print(f"{r[0]:>6}  {(r[1] or '') + ' ' + (r[2] or ''):<32} {r[3] or '-':<34} member this year: {'YES' if r[4] else 'no'}")
+    print(f"{len(rows)} found.")
+
+
+def cmd_access_year(cur, a):
+    """Switch access on/off for every member of one year, leaving out --except ids."""
+    on = a.state == "on"
+    keep = a.except_ids or []
+    cur.execute("""SELECT m.profile_id FROM suncity.season_membership m
+                   WHERE m.season_year = %s AND m.status IN ('PAID','COMP') AND NOT (m.profile_id = ANY(%s))""",
+                (a.year, keep))
+    ids = [r[0] for r in cur.fetchall()]
+    for pid in ids:
+        ensure_account(cur, pid)
+        cur.execute("UPDATE suncity.portal_account SET access_enabled=%s, updated_at=now() WHERE profile_id=%s", (on, pid))
+        audit(cur, pid, "ACCESS_ON" if on else "ACCESS_OFF", f"all {a.year} members", a.by)
+    print(f"Access {'ON' if on else 'OFF'} for {len(ids)} {a.year} members" + (f" (left out: {', '.join(map(str, keep))})" if keep else "") + ".")
+
+
 def decide(row):
     """What the portal should do for a bowler AFTER the password was checked. Mirrors docs/bowler-portal.md."""
     if not row[5]:
@@ -224,11 +252,14 @@ def main(argv=None):
     x = s.add_parser("unmember"); x.add_argument("id", type=int); x.add_argument("year", type=int); x.add_argument("--by", required=True)
     x = s.add_parser("members"); x.add_argument("year", type=int)
     x = s.add_parser("check"); x.add_argument("id", type=int); x.add_argument("--year", type=int)
+    x = s.add_parser("find"); x.add_argument("name")
+    x = s.add_parser("access-year"); x.add_argument("year", type=int); x.add_argument("state", choices=["on", "off"])
+    x.add_argument("--by", required=True); x.add_argument("--except", dest="except_ids", type=int, nargs="*")
     x = s.add_parser("grant-portal"); x.add_argument("role")
     a = p.parse_args(argv)
     fn = {"install": cmd_install, "show": cmd_show, "set-password": cmd_set_password, "access": cmd_access,
           "unlock": cmd_unlock, "member": cmd_member, "unmember": cmd_unmember, "members": cmd_members,
-          "check": cmd_check, "grant-portal": cmd_grant}[a.cmd]
+          "check": cmd_check, "find": cmd_find, "access-year": cmd_access_year, "grant-portal": cmd_grant}[a.cmd]
     conn = connect()
     try:
         with conn, conn.cursor() as cur:
